@@ -19,6 +19,7 @@ from langgraph_cli.docker import DockerCapabilities
 from langgraph_cli.exec import Runner, subp_exec
 from langgraph_cli.progress import Progress
 from langgraph_cli.templates import TEMPLATE_HELP_STRING, create_new
+from langgraph_cli.util import urljoin
 from langgraph_cli.version import __version__
 
 OPT_DOCKER_COMPOSE = click.option(
@@ -151,6 +152,11 @@ OPT_POSTGRES_URI = click.option(
     help="Postgres URI to use for the database. Defaults to launching a local database",
 )
 
+OPT_REGISTRY = click.option(
+    "--registry",
+    help="Specify a custom container registry URL to pull images from. Defaults to Docker Hub",
+)
+
 
 @click.group()
 @click.version_option(version=__version__, prog_name="LangGraph CLI")
@@ -168,6 +174,7 @@ def cli():
 @OPT_DEBUGGER_BASE_URL
 @OPT_WATCH
 @OPT_POSTGRES_URI
+@OPT_REGISTRY
 @click.option(
     "--wait",
     is_flag=True,
@@ -187,6 +194,7 @@ def up(
     debugger_port: Optional[int],
     debugger_base_url: Optional[str],
     postgres_uri: Optional[str],
+    registry: Optional[str],
 ):
     click.secho("Starting LangGraph API server...", fg="green")
     click.secho(
@@ -207,6 +215,7 @@ For production use, requires a license key in env var LANGGRAPH_CLOUD_LICENSE_KE
             debugger_port=debugger_port,
             debugger_base_url=debugger_base_url,
             postgres_uri=postgres_uri,
+            registry=registry,
         )
         # add up + options
         args.extend(["up", "--remove-orphans"])
@@ -273,11 +282,12 @@ def _build(
     pull: bool,
     tag: str,
     passthrough: Sequence[str] = (),
+    registry: Optional[str] = None,
 ):
     base_image = base_image or (
-        "langchain/langgraphjs-api"
+        urljoin(registry, "langchain/langgraphjs-api")
         if config_json.get("node_version")
-        else "langchain/langgraph-api"
+        else urljoin(registry, "langchain/langgraph-api")
     )
 
     # pull latest images
@@ -346,6 +356,7 @@ def _build(
     hidden=True,
 )
 @click.argument("docker_build_args", nargs=-1, type=click.UNPROCESSED)
+@OPT_REGISTRY
 @cli.command(
     help="📦 Build LangGraph API server Docker image.",
     context_settings=dict(
@@ -359,13 +370,22 @@ def build(
     base_image: Optional[str],
     pull: bool,
     tag: str,
+    registry: Optional[str],
 ):
     with Runner() as runner, Progress(message="Pulling...") as set:
         if shutil.which("docker") is None:
             raise click.UsageError("Docker not installed") from None
         config_json = langgraph_cli.config.validate_config_file(config)
         _build(
-            runner, set, config, config_json, base_image, pull, tag, docker_build_args
+            runner,
+            set,
+            config,
+            config_json,
+            base_image,
+            pull,
+            tag,
+            docker_build_args,
+            registry,
         )
 
 
@@ -439,8 +459,14 @@ tests
     ),
     is_flag=True,
 )
+@OPT_REGISTRY
 @log_command
-def dockerfile(save_path: str, config: pathlib.Path, add_docker_compose: bool) -> None:
+def dockerfile(
+    save_path: str,
+    config: pathlib.Path,
+    add_docker_compose: bool,
+    registry: Optional[str],
+) -> None:
     save_path = pathlib.Path(save_path).absolute()
     secho(f"🔍 Validating configuration at path: {config}", fg="yellow")
     config_json = langgraph_cli.config.validate_config_file(config)
@@ -451,9 +477,9 @@ def dockerfile(save_path: str, config: pathlib.Path, add_docker_compose: bool) -
         config,
         config_json,
         (
-            "langchain/langgraphjs-api"
+            urljoin(registry, "langchain/langgraphjs-api")
             if config_json.get("node_version")
-            else "langchain/langgraph-api"
+            else urljoin(registry, "langchain/langgraph-api")
         ),
     )
     with open(str(save_path), "w", encoding="utf-8") as f:
@@ -686,6 +712,7 @@ def prepare_args_and_stdin(
     debugger_port: Optional[int] = None,
     debugger_base_url: Optional[str] = None,
     postgres_uri: Optional[str] = None,
+    registry: Optional[str] = None,
 ) -> Tuple[List[str], str]:
     assert config_path.exists(), f"Config file not found: {config_path}"
     # prepare args
@@ -695,6 +722,7 @@ def prepare_args_and_stdin(
         debugger_port=debugger_port,
         debugger_base_url=debugger_base_url,
         postgres_uri=postgres_uri,
+        registry=registry,
     )
     args = [
         "--project-directory",
@@ -710,9 +738,9 @@ def prepare_args_and_stdin(
         config,
         watch=watch,
         base_image=(
-            "langchain/langgraphjs-api"
+            urljoin(registry, "langchain/langgraphjs-api")
             if config.get("node_version")
-            else "langchain/langgraph-api"
+            else urljoin(registry, "langchain/langgraph-api")
         ),
     )
     return args, stdin
@@ -731,9 +759,11 @@ def prepare(
     debugger_port: Optional[int] = None,
     debugger_base_url: Optional[str] = None,
     postgres_uri: Optional[str] = None,
+    registry: Optional[str] = None,
 ) -> Tuple[List[str], str]:
     """Prepare the arguments and stdin for running the LangGraph API server."""
     config_json = langgraph_cli.config.validate_config_file(config_path)
+
     # pull latest images
     if pull:
         runner.run(
@@ -741,9 +771,15 @@ def prepare(
                 "docker",
                 "pull",
                 (
-                    f"langchain/langgraphjs-api:{config_json['node_version']}"
+                    urljoin(
+                        registry,
+                        f"langchain/langgraphjs-api:{config_json['node_version']}",
+                    )
                     if config_json.get("node_version")
-                    else f"langchain/langgraph-api:{config_json['python_version']}"
+                    else urljoin(
+                        registry,
+                        f"langchain/langgraph-api:{config_json['python_version']}",
+                    )
                 ),
                 verbose=verbose,
             )
@@ -759,5 +795,7 @@ def prepare(
         debugger_port=debugger_port,
         debugger_base_url=debugger_base_url or f"http://127.0.0.1:{port}",
         postgres_uri=postgres_uri,
+        registry=registry,
     )
+
     return args, stdin

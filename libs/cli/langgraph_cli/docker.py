@@ -6,6 +6,7 @@ from typing import Literal, NamedTuple, Optional
 import click.exceptions
 
 from langgraph_cli.exec import subp_exec
+from langgraph_cli.util import urljoin
 
 ROOT = pathlib.Path(__file__).parent.resolve()
 DEFAULT_POSTGRES_URI = (
@@ -89,14 +90,17 @@ def check_capabilities(runner) -> DockerCapabilities:
 
 
 def debugger_compose(
-    *, port: Optional[int] = None, base_url: Optional[str] = None
+    *,
+    port: Optional[int] = None,
+    base_url: Optional[str] = None,
+    registry: Optional[str] = None,
 ) -> dict:
     if port is None:
         return ""
 
     config = {
         "langgraph-debugger": {
-            "image": "langchain/langgraph-debugger",
+            "image": urljoin(registry, "langchain/langgraph-debugger"),
             "restart": "on-failure",
             "depends_on": {
                 "langgraph-postgres": {"condition": "service_healthy"},
@@ -143,6 +147,7 @@ def compose_as_dict(
     debugger_base_url: Optional[str] = None,
     # postgres://user:password@host:port/database?option=value
     postgres_uri: Optional[str] = None,
+    registry: Optional[str] = None,
 ) -> dict:
     """Create a docker compose file as a dictionary in YML style."""
     if postgres_uri is None:
@@ -159,7 +164,7 @@ def compose_as_dict(
     # Define the Redis service first as per the test order
     services = {
         "langgraph-redis": {
-            "image": "redis:6",
+            "image": urljoin(registry, "redis:6"),
             "healthcheck": {
                 "test": "redis-cli ping",
                 "interval": "5s",
@@ -172,7 +177,7 @@ def compose_as_dict(
     # Add Postgres service before langgraph-api if it is needed
     if include_db:
         services["langgraph-postgres"] = {
-            "image": "pgvector/pgvector:pg16",
+            "image": urljoin(registry, "pgvector/pgvector:pg16"),
             "ports": ['"5433:5432"'],
             "environment": {
                 "POSTGRES_DB": "postgres",
@@ -197,7 +202,7 @@ def compose_as_dict(
     # Add optional debugger service if debugger_port is specified
     if debugger_port:
         services["langgraph-debugger"] = debugger_compose(
-            port=debugger_port, base_url=debugger_base_url
+            port=debugger_port, base_url=debugger_base_url, registry=registry
         )["langgraph-debugger"]
 
     # Add langgraph-api service
@@ -244,6 +249,7 @@ def compose(
     debugger_base_url: Optional[str] = None,
     # postgres://user:password@host:port/database?option=value
     postgres_uri: Optional[str] = None,
+    registry: Optional[str] = None,
 ) -> str:
     """Create a docker compose file as a string."""
     compose_content = compose_as_dict(
@@ -252,6 +258,7 @@ def compose(
         debugger_port=debugger_port,
         debugger_base_url=debugger_base_url,
         postgres_uri=postgres_uri,
+        registry=registry,
     )
     compose_str = dict_to_yaml(compose_content)
     return compose_str
